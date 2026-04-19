@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:16
+    container_name: mediconnect-postgres
+    environment:
+      POSTGRES_DB: mediconnect
+      POSTGRES_USER: mediconnect
+      POSTGRES_PASSWORD: mediconnect
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Init scripts run only on first DB initialization; keep them for "fresh volume" case.
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+
+  migrate:
+    image: postgres:16
+    container_name: mediconnect-migrate
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: mediconnect
+      PGUSER: mediconnect
+      PGPASSWORD: mediconnect
+    volumes:
+      - ./db:/db:ro
+    depends_on:
+      - db
+    restart: "no"
+    command: >
+      bash -lc "
+        until pg_isready -h \"$$PGHOST\" -p \"$$PGPORT\" -U \"$$PGUSER\"; do sleep 1; done;
+        psql -v ON_ERROR_STOP=1 -f /db/schema.sql;
+        psql -v ON_ERROR_STOP=1 -f /db/seed.sql;
+      "
+
+  api:
+    image: python:3.12-slim
+    container_name: mediconnect-api
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql://mediconnect:mediconnect@db:5432/mediconnect
+      JWT_SECRET: change-me
+      JWT_ALG: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 120
+    volumes:
+      - ./api:/app
+    command: sh -c "pip install -r requirements.txt && uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+
